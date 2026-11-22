@@ -1,7 +1,5 @@
 "use strict";
 // Low Tide City — the world: state, the fixed-step simulation, crime and
-// consequences. Everything the other modules need to agree on lives here:
-// the player, the car and ped lists, the clock, the weather, the heat.
 
 const World = {
   state: "title", // title | play | pause | howto | busted | wasted
@@ -13,23 +11,38 @@ const World = {
   player: null,
   missionCar: null,
   hours: START_HOUR,
+  time: 0, // simulation seconds since build (traffic lights, the heli)
   weather: "clear",
   weatherT: 30,
+  lightningT: 0,
   heat: 0,
   stars: 0,
   unseenT: 0,
   copSeesPlayer: false,
+  heli: null,
+  heliSees: false,
+  spikes: [],
+  pendingReports: [], // crimes a pedestrian is still calling in
   bustT: 0,
   cash: 120,
   respect: 0,
   dialogue: null,
   banner: null,
+  toast: null,
+  tracers: [],
   resultScreen: null,
   prompt: null,
+  sprayT: 0,
+  ownedHouses: [true, false, false],
+  ownAllHouses: false,
+  garageCar: null,
+  packagesGot: 0,
+  selectOpen: false, // the phone's mission list (Tab) pauses the world
+  waypoint: null,
   stateT: 0, // time in busted/wasted screens
   events: [],
 
-  build(seed) {
+  build(seed, fresh) {
     this.seed = seed;
     this.rng = makeRng(seed ^ 0x9e3779b9);
     City.build(seed);
@@ -42,12 +55,10 @@ const World = {
       car.parked = true;
       this.cars.push(car);
     }
-    // Marisol's Corvo, waiting by the dock office.
     const ms = City.missionCarSpot;
     this.missionCar = makeCar("sedan", ms.x, ms.y, ms.ang, "#8a8f96");
     this.missionCar.parked = true;
     this.cars.push(this.missionCar);
-    // The garage step of mission 1 points at the real garage.
     const gotoStep = MISSION_WHEELS_UP.steps[2];
     gotoStep.x = City.garagePos.x; gotoStep.y = City.garagePos.y;
 
@@ -56,13 +67,62 @@ const World = {
       vx: 0, vy: 0, car: null, health: PLAYER.health, walkPhase: 0,
     };
     this.hours = START_HOUR;
+    this.time = 0;
     this.weather = "clear";
     this.weatherT = 40;
+    this.lightningT = 0;
     this.heat = 0; this.stars = 0; this.unseenT = 0;
     this.cash = 120; this.respect = 0;
     this.dialogue = null; this.banner = null; this.resultScreen = null;
+    this.toast = null; this.tracers = [];
+    this.heli = null; this.heliSees = false;
+    this.spikes = []; this.pendingReports = [];
+    this.sprayT = 0; this._sprayLatch = false;
+    this.ownedHouses = [true, false, false];
+    this.ownAllHouses = false;
+    this.garageCar = null;
+    this.packagesGot = 0;
+    this.selectOpen = false;
+    this.waypoint = null;
+    if (fresh) { Missions.done = {}; Missions.active = null; Jobs.job = null; }
+    else this._load();
     this.state = "title";
     return this;
+  },
+
+  // ---- save / load (localStorage; a courtesy, never a crash) ----
+  save() {
+    try {
+      localStorage.setItem("lowtide.save.v1", JSON.stringify({
+        v: 1, cash: this.cash, respect: this.respect, done: Missions.done,
+        pkg: City.packages.map((k) => (k.got ? 1 : 0)),
+        owned: this.ownedHouses, ownAll: this.ownAllHouses, garage: this.garageCar,
+      }));
+    } catch (e) { /* storage blocked: play on unsaved */ }
+  },
+  hasSave() {
+    try { return !!localStorage.getItem("lowtide.save.v1"); } catch (e) { return false; }
+  },
+  clearSave() {
+    try { localStorage.removeItem("lowtide.save.v1"); } catch (e) { /* ignore */ }
+  },
+  _load() {
+    try {
+      const raw = localStorage.getItem("lowtide.save.v1");
+      if (!raw) return;
+      const s = JSON.parse(raw);
+      if (!s || s.v !== 1) return;
+      this.cash = s.cash | 0;
+      this.respect = s.respect | 0;
+      Missions.done = s.done || {};
+      if (Array.isArray(s.pkg)) {
+        s.pkg.forEach((g, i) => { if (City.packages[i]) City.packages[i].got = !!g; });
+        this.packagesGot = City.packages.filter((k) => k.got).length;
+      }
+      if (Array.isArray(s.owned)) this.ownedHouses = s.owned;
+      this.ownAllHouses = !!s.ownAll;
+      this.garageCar = s.garage || null;
+    } catch (e) { /* a broken save is a fresh start */ }
   },
 
   starsFor(heat) {
@@ -71,41 +131,64 @@ const World = {
     return s;
   },
 
-  // A crime goes on the heat only if someone saw it: a cop with line of
-  // sight, or a pedestrian close by. Either way the police now know
-  // roughly where to look.
+  // A crime goes on the heat only if someone saw it. A cop with line of
   reportCrime(kind, x, y) {
-    let witnessed = Peds.anyNear(this, x, y, 55);
-    if (!witnessed) {
-      for (const car of this.cars) {
-        if (car.driver === "cop" && dist2(car.x, car.y, x, y) < 85 * 85 &&
-            Police.hasLOS(car.x, car.y, x, y)) { witnessed = true; break; }
+    for (const car of this.cars) {
+      if (car.driver === "cop" && dist2(car.x, car.y, x, y) < 85 * 85 &&
+          Police.hasLOS(car.x, car.y, x, y)) {
+        this._applyCrime(kind, x, y);
+        return true;
       }
     }
-    if (witnessed) {
-      this.heat += CRIME[kind] || 0;
-      this.stars = this.starsFor(this.heat);
-      for (const car of this.cars) {
-        if (car.driver === "cop" && car.ai) { car.ai.sx = x; car.ai.sy = y; }
-      }
+    if (this.stars > 0) { this._applyCrime(kind, x, y); return true; }
+    let wit = null, bd = 30 * 30;
+    for (const ped of this.peds) {
+      if (ped.state === "down") continue;
+      const d = dist2(ped.x, ped.y, x, y);
+      if (d < bd) { bd = d; wit = ped; }
     }
-    return witnessed;
+    if (wit) {
+      this.pendingReports.push({ kind, x, y, t: 2.5, ped: wit });
+      return true;
+    }
+    return false;
+  },
+
+  _applyCrime(kind, x, y) {
+    this.heat += CRIME[kind] || 0;
+    this.stars = this.starsFor(this.heat);
+    for (const car of this.cars) {
+      if (car.driver === "cop" && car.ai) { car.ai.sx = x; car.ai.sy = y; }
+    }
   },
 
   step(dt) {
     if (this.state !== "play") return;
+    if (this.selectOpen) { this._selectStep(); Input.endStep(); return; }
+    if (Input.consume("jobs") && !this.dialogue) { this.selectOpen = true; Input.endStep(); return; }
     this.events.length = 0;
+    this.time += dt;
 
-    // Clock and weather.
+    // Clock and weather: a Markov chain rolled once a game hour.
     this.hours = (this.hours + dt * 24 / DAY_SECONDS) % 24;
     this.weatherT -= dt;
     if (this.weatherT <= 0) {
-      this.weatherT = 45 + this.rng.next() * 60;
+      this.weatherT = 40;
+      const rows = {
+        clear: [0.70, 0.90, 0.95, 0.95], cloud: [0.30, 0.70, 0.90, 0.95],
+        rain: [0.10, 0.40, 0.80, 0.95], storm: [0, 0.20, 0.70, 1],
+        fog: [0.40, 0.70, 0.80, 0.80],
+      };
+      const row = rows[this.weather] || rows.clear;
       const roll = this.rng.next();
-      if (this.weather === "clear") this.weather = roll < 0.3 ? "cloud" : "clear";
-      else if (this.weather === "cloud") this.weather = roll < 0.4 ? "rain" : roll < 0.7 ? "clear" : "cloud";
-      else this.weather = roll < 0.5 ? "cloud" : "rain";
+      const names = ["clear", "cloud", "rain", "storm", "fog"];
+      for (let i = 0; i < 5; i++) {
+        if (roll <= (i < 4 ? row[i] : 1)) { this.weather = names[i]; break; }
+      }
     }
+    GRIP_MUL = this.weather === "rain" ? 0.82 : this.weather === "storm" ? 0.74 : 1;
+    if (this.weather === "storm" && this.rng.chance(dt / 8)) this.lightningT = 0.16;
+    if (this.lightningT > 0) this.lightningT -= dt;
 
     this._playerStep(dt);
     Traffic.update(this, dt, this.events, this.rng);
@@ -115,14 +198,103 @@ const World = {
     this._events(dt);
     Missions.update(this, dt);
     this._wantedStep(dt);
+    this._placesStep(dt);
     this._promptStep();
 
+    for (let i = this.pendingReports.length - 1; i >= 0; i--) {
+      const r = this.pendingReports[i];
+      r.t -= dt;
+      if (r.t > 0) continue;
+      this.pendingReports.splice(i, 1);
+      if (r.ped.state !== "down" && this.peds.includes(r.ped) &&
+          dist2(r.ped.x, r.ped.y, r.x, r.y) < 50 * 50) {
+        this._applyCrime(r.kind, r.x, r.y);
+      }
+    }
+    for (let i = this.tracers.length - 1; i >= 0; i--) {
+      this.tracers[i].t -= dt;
+      if (this.tracers[i].t <= 0) this.tracers.splice(i, 1);
+    }
+
     if (this.banner) { this.banner.t -= dt; if (this.banner.t <= 0) this.banner = null; }
+    if (this.toast) { this.toast.t -= dt; if (this.toast.t <= 0) this.toast = null; }
     if (this.resultScreen) {
       this.resultScreen.t -= dt;
       if (this.resultScreen.t <= 0) this.resultScreen = null;
     }
     Input.endStep();
+  },
+
+  // The phone's mission list: navigate, pick a giver to waypoint, close.
+  _selectStep() {
+    const list = Missions.list(this);
+    if (Input.consume("jobs") || Input.consume("pause")) { this.selectOpen = false; return; }
+    if (Input.consume("up")) Missions.selectIdx = (Missions.selectIdx + list.length - 1) % list.length;
+    if (Input.consume("down")) Missions.selectIdx = (Missions.selectIdx + 1) % list.length;
+    if (Input.consume("confirm") || Input.consume("interact")) {
+      const row = list[Missions.selectIdx];
+      if (row && row.state !== "locked") {
+        const g = City.givers[row.def.giver];
+        if (g) this.waypoint = { x: g.x, y: g.y };
+      }
+      this.selectOpen = false;
+    }
+  },
+
+  // Services and collectibles that tick every step: spike strips under
+  _placesStep(dt) {
+    const p = this.player;
+    if (p.car) {
+      for (const s of this.spikes) {
+        if (!p.car.spiked && Math.abs(p.car.x - s.x) < 1.6 &&
+            Math.abs(p.car.y - s.y) < s.len / 2 && carSpeed(p.car) > 4) {
+          p.car.spiked = true;
+          this.toast = { text: "Tyres shredded on the spike strip!", t: 2.6 };
+        }
+      }
+      let inSpray = false;
+      if (this.stars <= 4) {
+        for (const s of City.sprays) {
+          if (dist2(p.car.x, p.car.y, s.x, s.y) < 64) { inSpray = true; break; }
+        }
+      }
+      if (inSpray && carSpeed(p.car) < 1.2) {
+        this.sprayT += dt;
+        if (this.sprayT > 1.1 && !this._sprayLatch) {
+          this._sprayLatch = true;
+          const free = Missions.active && Missions.active.def.id === "paint_it_hot";
+          if (free || this.cash >= 250) {
+            if (!free) this.cash -= 250;
+            this.heat = 0; this.stars = 0;
+            p.car.damage = 0; p.car.spiked = false;
+            p.car.color = this.rng.pick(CAR_COLORS);
+            this.banner = {
+              text: "Spray Rápido",
+              sub: free ? "On Ramón's tab — fresh paint, clean record" : "Fresh paint, clean record — $250",
+              t: 2.6,
+            };
+          } else {
+            this.toast = { text: "Spray Rápido needs $250", t: 2 };
+          }
+        }
+      } else this.sprayT = 0;
+      if (!inSpray) this._sprayLatch = false;
+    }
+    const px = p.car ? p.car.x : p.x, py = p.car ? p.car.y : p.y;
+    for (const pk of City.packages) {
+      if (pk.got) continue;
+      if (dist2(px, py, pk.x, pk.y) < 12) {
+        pk.got = true;
+        this.packagesGot++;
+        this.cash += 100;
+        this.toast = { text: "Hidden package " + this.packagesGot + " / 20 · +$100", t: 2.2 };
+        if (this.packagesGot === 20) {
+          this.cash += 1000;
+          this.banner = { text: "All 20 packages", sub: "+$1,000 — the city provides", t: 3 };
+        }
+        this.save();
+      }
+    }
   },
 
   _playerStep(dt) {
@@ -139,7 +311,6 @@ const World = {
       if (Input.consume("interact")) this._exitCar();
       return;
     }
-    // On foot.
     const ax = Input.axisX(), ay = Input.axisY();
     const moving = ax !== 0 || ay !== 0;
     const speed = Input.keys.sprint ? PLAYER.sprint : PLAYER.walk;
@@ -152,7 +323,6 @@ const World = {
       p.vx = 0; p.vy = 0;
     }
     p.x += p.vx * dt; p.y += p.vy * dt;
-    // Buildings and parked cars are solid.
     City.grid.query(p.x, p.y, 4, (b) => {
       const hit = circleVsAabb(p.x, p.y, PLAYER.r, b);
       if (hit) { p.x += hit.x; p.y += hit.y; }
@@ -194,9 +364,13 @@ const World = {
     if (!best) return;
     const wasParked = best.parked;
     const hadDriver = best.driver === "traffic";
-    if (best.type === "police") this.reportCrime("stealCop", best.x, best.y);
-    else if (hadDriver) this.reportCrime("carjack", best.x, best.y);
-    else if (wasParked) this.reportCrime("stealParked", best.x, best.y);
+    // A car handed over by a mission step is a gift, not a theft.
+    const handed = Missions.active && Missions.active.car === best;
+    if (!handed) {
+      if (best.type === "police") this.reportCrime("stealCop", best.x, best.y);
+      else if (hadDriver) this.reportCrime("carjack", best.x, best.y);
+      else if (wasParked) this.reportCrime("stealParked", best.x, best.y);
+    }
     if (hadDriver) {
       // The driver bails out and runs.
       const ped = {
@@ -281,6 +455,8 @@ const World = {
     if (this._hitCooldown > 0) this._hitCooldown -= dt;
     for (const ev of this.events) {
       if (ev.kind === "crash") {
+        if (ev.car === this.player.car && ev.other) ev.other._byPlayer = true;
+        if (ev.other === this.player.car && ev.car) ev.car._byPlayer = true;
         const mine = ev.car === this.player.car || ev.other === this.player.car;
         if (mine && ev.impulse > 4.5) {
           const other = ev.car === this.player.car ? ev.other : ev.car;
@@ -376,10 +552,72 @@ const World = {
     this.promptAction = null;
     const p = this.player;
     if (p.car || this.dialogue) return;
-    const def = Missions.available(this);
-    if (def && City.dockPos && dist2(p.x, p.y, City.dockPos.x, City.dockPos.y) < 20) {
-      this.prompt = "E — Talk to Marisol";
-      this.promptAction = () => Missions.start(this, def);
+    // Mission givers: anyone with work for you gets a prompt.
+    for (const key of Object.keys(City.givers)) {
+      const g = City.givers[key];
+      if (!g || dist2(p.x, p.y, g.x, g.y) >= 20) continue;
+      const def = Missions.forGiver(this, key);
+      if (def) {
+        this.prompt = "E — Talk to " + def.giverName.split(" — ")[0];
+        this.promptAction = () => Missions.start(this, def);
+        return;
+      }
+    }
+    // Safehouses: buy the door, rest behind it, work the garage.
+    for (let i = 0; i < City.safehouses.length; i++) {
+      const h = City.safehouses[i];
+      if (dist2(p.x, p.y, h.x, h.y) >= 14) continue;
+      const owned = this.ownAllHouses || this.ownedHouses[i];
+      if (!owned) {
+        if (this.cash >= h.price) {
+          this.prompt = "E — Buy this safehouse ($" + h.price.toLocaleString("en-US") + ")";
+          this.promptAction = () => {
+            this.cash -= h.price;
+            this.ownedHouses[i] = true;
+            this.banner = { text: "Safehouse bought", sub: "A door of your own in Puerto Ámbar", t: 2.6 };
+            this.save();
+          };
+        } else {
+          this.prompt = "Safehouse — $" + h.price.toLocaleString("en-US");
+        }
+        return;
+      }
+      if (h.garage) {
+        let bayCar = null;
+        for (const car of this.cars) {
+          if (!car.driver && !car.sunk && dist2(car.x, car.y, h.x, h.y) < 64) { bayCar = car; break; }
+        }
+        if (bayCar && !this.garageCar) {
+          this.prompt = "E — Store the " + bayCar.def.name + " in the garage";
+          this.promptAction = () => {
+            this.garageCar = { type: bayCar.type, color: bayCar.color, damage: bayCar.damage };
+            this.cars.splice(this.cars.indexOf(bayCar), 1);
+            this.toast = { text: "Stored in the garage", t: 2 };
+            this.save();
+          };
+          return;
+        }
+        if (!bayCar && this.garageCar) {
+          const g2 = this.garageCar;
+          this.prompt = "E — Take out the " + VEHICLE_TYPES[g2.type].name;
+          this.promptAction = () => {
+            const car = makeCar(g2.type, h.x + 4, h.y, 0, g2.color);
+            car.damage = g2.damage;
+            car.parked = true;
+            this.cars.push(car);
+            this.garageCar = null;
+            this.save();
+          };
+          return;
+        }
+      }
+      this.prompt = "E — Rest at the safehouse";
+      this.promptAction = () => {
+        p.health = PLAYER.health;
+        if (this.hours > 19 || this.hours < 5.5) this.hours = 8;
+        this.banner = { text: "Rested", sub: "The city kept turning without you", t: 2.2 };
+        this.save();
+      };
       return;
     }
     // Otherwise, hint at the nearest car door.

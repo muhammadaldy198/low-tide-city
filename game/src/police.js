@@ -1,11 +1,5 @@
 "use strict";
 // Low Tide City — the Policía Municipal: wanted response.
-//
-// Patrol cars spawn out of sight and hunt as a pack. A cop who can see
-// the player gives chase directly, aiming where the player will be; a
-// cop who cannot routes along the roads to the last known position and
-// then searches the blocks around it. At three stars and up, a pair of
-// cars parks across whichever bridge the player is heading for.
 
 const Police = {
   // Line of sight: sample the segment; a building swallows it.
@@ -79,6 +73,7 @@ const Police = {
     const stars = world.stars;
     const want = COPS_AT[stars] || 0;
     if (stars > 0 && this.countCops(world) < want) this.spawnCop(world, rng);
+    world.heliSees = false;
 
     let anySee = false;
     for (const car of world.cars) {
@@ -96,7 +91,7 @@ const Police = {
       if (car.sunk) { car.driver = "despawn"; continue; }
       if (stars === 0 && d > 200) { car.driver = "despawn"; continue; }
 
-      const sees = stars > 0 && d < 95 && this.hasLOS(car.x, car.y, p.x, p.y);
+      const sees = stars > 0 && d < (world.weather === "fog" ? 58 : 95) && this.hasLOS(car.x, car.y, p.x, p.y);
       if (sees) {
         anySee = true;
         ai.sx = p.x; ai.sy = p.y;
@@ -149,12 +144,63 @@ const Police = {
       const ctrl = Traffic.drive(car, tx, ty, speedWanted, dt);
       stepCar(car, ctrl, dt, events);
     }
-    world.copSeesPlayer = anySee;
+    this._heli(world, dt, rng);
+    world.copSeesPlayer = anySee || world.heliSees;
     this._blockades(world, rng);
   },
 
+  // The helicopter: from three stars it shadows the player from 30 m up,
+  _heli(world, dt, rng) {
+    const p = world.player;
+    if (world.stars >= 3 && !world.heli) {
+      const a = rng.range(0, Math.PI * 2);
+      world.heli = {
+        x: p.x + Math.cos(a) * 240, y: p.y + Math.sin(a) * 240,
+        vx: 0, vy: 0, ang: 0, fireT: 2.5,
+      };
+    }
+    const h = world.heli;
+    if (!h) return;
+    const dxp = h.x - p.x, dyp = h.y - p.y;
+    const dp = Math.hypot(dxp, dyp) || 1;
+    if (world.stars < 3) {
+      h.vx = (dxp / dp) * 34; h.vy = (dyp / dp) * 34;
+      h.x += h.vx * dt; h.y += h.vy * dt;
+      h.ang = Math.atan2(h.vy, h.vx);
+      if (dp > 330) world.heli = null;
+      return;
+    }
+    // Orbit point: ahead of the player's motion, circling when slow.
+    const pvx = p.car ? p.car.vx : p.vx, pvy = p.car ? p.car.vy : p.vy;
+    const orb = world.time * 0.45;
+    const tx = p.x + pvx * 1.1 + Math.cos(orb) * 20;
+    const ty = p.y + pvy * 1.1 + Math.sin(orb) * 20;
+    const dx = tx - h.x, dy = ty - h.y, d = Math.hypot(dx, dy) || 1;
+    const want = Math.min(30, d * 1.5);
+    h.vx += clamp((dx / d) * want - h.vx, -30 * dt, 30 * dt);
+    h.vy += clamp((dy / d) * want - h.vy, -30 * dt, 30 * dt);
+    h.x += h.vx * dt; h.y += h.vy * dt;
+    if (Math.abs(h.vx) + Math.abs(h.vy) > 0.5) h.ang = Math.atan2(h.vy, h.vx);
+    if (dp < 62) {
+      world.heliSees = true;
+      for (const car of world.cars) {
+        if (car.driver === "cop" && car.ai) { car.ai.sx = p.x; car.ai.sy = p.y; }
+      }
+    }
+    if (world.stars >= 5) {
+      h.fireT -= dt;
+      if (h.fireT <= 0 && dp < 75) {
+        h.fireT = 3;
+        world.tracers.push({ x0: h.x, y0: h.y, x1: p.x, y1: p.y, t: 0.14 });
+        if (rng.chance(0.55)) {
+          if (p.car) p.car.damage = Math.min(130, p.car.damage + 7);
+          else { p.health -= 8; if (p.health <= 0) world._wasted(); }
+        }
+      }
+    }
+  },
+
   // Bridge blockades at 3+ stars: one pair per bridge, spawned once —
-  // the row stays marked on the world until both cars are gone.
   _blockades(world, rng) {
     if (world.stars < 3) return;
     if (!world.blockadedRows) world.blockadedRows = new Set();
@@ -164,7 +210,10 @@ const Police = {
       for (const car of world.cars) {
         if (car.ai && car.ai.mode === "blockade" && car.ai.row === k) alive++;
       }
-      if (alive === 0) world.blockadedRows.delete(k);
+      if (alive === 0) {
+        world.blockadedRows.delete(k);
+        if (world.spikes) world.spikes = world.spikes.filter((s) => s.row !== k);
+      }
     }
     const p = world.player;
     const r = City.riverRect();
@@ -180,6 +229,11 @@ const Police = {
         car.parked = true;
         car.ai = { mode: "blockade", row: k };
         world.cars.push(car);
+      }
+      // From four stars the gap between the cars gets a spike strip.
+      if (world.stars >= 4) {
+        if (!world.spikes) world.spikes = [];
+        world.spikes.push({ x: midX, y: by, len: w * 0.8, row: k });
       }
       world.blockadedRows.add(k);
       return;

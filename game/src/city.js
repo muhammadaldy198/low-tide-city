@@ -1,11 +1,5 @@
 "use strict";
 // Low Tide City — city generation.
-//
-// Builds Puerto Ámbar from one seed: a 14x14 block grid with a river down
-// column 5 (three bridges), a beach and sea on the east edge, six districts
-// by nearest-centre, per-district building stock, fixed landmarks, parked
-// car spots, palms and lamps. Pure data plus queries — render.js draws it,
-// world.js populates it. The same seed always builds the same city.
 
 const City = {
   seed: 7,
@@ -22,6 +16,11 @@ const City = {
   hospitalPos: null,  // hospital door (wasted respawn)
   garagePos: null,    // mission 1 destination bay
   dockPos: null,      // Marisol's office door (mission 1 start)
+  lights: [],         // {a, b, x, y} signalled junctions (avenue crossings)
+  sprays: [],         // Pay 'n' Spray bays {x, y}
+  safehouses: [],     // {x, y, price, garage}
+  givers: {},         // mission-giver standing spots by key
+  packages: [],       // hidden packages {x, y, got}
 
   lotRect(i, j) {
     const x0 = roadCenter(i) + roadWidth(i) / 2 + 3;
@@ -94,6 +93,7 @@ const City = {
       }
     }
     this._landmarks(rng);
+    this._places(rng);
     this.grid = makeGrid(48);
     for (const b of this.buildings) {
       this.grid.insert(b, (b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2);
@@ -189,7 +189,6 @@ const City = {
   },
 
   // Fixed lots the story and the skyline depend on. Returns true when the
-  // lot was claimed so the generic builder skips it.
   _specialLot(i, j, lot, district) {
     const midX = (lot.x0 + lot.x1) / 2, midY = (lot.y0 + lot.y1) / 2;
     if (i === 8 && j === 6) { // Ámbar Tower, Centro
@@ -263,6 +262,53 @@ const City = {
     this.playerStart = { x: lot.x0 - 6, y: (lot.y0 + lot.y1) / 2 };
   },
 
+  // Signal state at junction (a, b) for traffic running along the
+  lightState(a, b, vertical, t) {
+    const ph = (t + hash2(a, b, 7) * 24) % 24;
+    if (vertical) return ph < 9 ? "green" : ph < 11 ? "amber" : "red";
+    return ph >= 12 && ph < 21 ? "green" : ph >= 21 && ph < 23 ? "amber" : "red";
+  },
+
+  // The fixed service geography: signalled junctions, spray bays,
+  _places(rng) {
+    this.lights = [];
+    for (let a = 0; a <= BLOCKS; a++) {
+      for (let b = 0; b <= BLOCKS; b++) {
+        if (!isAvenue(a) && !isAvenue(b)) continue;
+        const x = roadCenter(a), y = roadCenter(b);
+        if (this.isWater(x, y)) continue;
+        this.lights.push({ a, b, x, y });
+      }
+    }
+    const edge = (i, j, dx, dy) => {
+      const lot = this.lotRect(i, j);
+      return { x: (lot.x0 + lot.x1) / 2 + dx, y: lot.y1 + 6 + dy };
+    };
+    this.sprays = [edge(8, 6, 18, 0), edge(4, 11, -14, 0), edge(12, 3, 10, 0)];
+    this.safehouses = [
+      { ...edge(12, 6, -20, 0), price: 0, garage: true },
+      { ...edge(1, 3, 12, 0), price: 5000, garage: false },
+      { ...edge(13, 10, -16, 0), price: 12000, garage: false },
+    ];
+    this.givers = {
+      marisol: this.dockPos,
+      ramon: edge(2, 9, -10, 0),
+      lucia: edge(13, 6, -6, 0),
+      ortega: this.stationPos,
+    };
+    this.packages = [];
+    for (let n = 0; n < 20; n++) {
+      const i = rng.int(0, BLOCKS - 1), j = rng.int(0, BLOCKS - 1);
+      if (i === RIVER_COL) { n--; continue; }
+      const lot = this.lotRect(i, j);
+      this.packages.push({
+        x: rng.chance(0.5) ? lot.x0 + 2.5 : lot.x1 - 2.5,
+        y: rng.range(lot.y0 + 6, lot.y1 - 6),
+        got: false,
+      });
+    }
+  },
+
   _streetDressing(block, rng) {
     const { i, j, district } = block;
     const lot = this.lotRect(i, j);
@@ -300,7 +346,6 @@ const City = {
   laneOffset(k) { return roadWidth(k) / 4; },
 
   // The point on the road network closest to (x, y): used by police
-  // routing and the search behaviour.
   nearestRoadPoint(x, y) {
     const ki = clamp(Math.round((x - ROAD_OFF) / PITCH), 0, BLOCKS);
     const kj = clamp(Math.round((y - ROAD_OFF) / PITCH), 0, BLOCKS);

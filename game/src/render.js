@@ -1,13 +1,5 @@
 "use strict";
 // Low Tide City — rendering.
-//
-// The ground (water, roads, pavements, lots, bridge decks) never changes,
-// so it is painted once into a big offscreen canvas at 2 px per metre and
-// blitted each frame. Buildings, cars and people are drawn per frame in
-// painter's order; buildings lean away from the screen centre in
-// proportion to their height, which fakes the third dimension. A lighting
-// pass tints the scene by the hour and, after dark, adds lamp pools,
-// headlight cones and police flashers.
 
 const Render = {
   staticLayer: null,
@@ -22,10 +14,8 @@ const Render = {
     const g = cv.getContext("2d");
     g.scale(S, S);
 
-    // Sea and deep water under everything.
     g.fillStyle = "#17384f";
     g.fillRect(0, 0, WORLD_SIZE, WORLD_SIZE);
-    // Landmass base.
     g.fillStyle = "#585c50";
     g.fillRect(0, 0, WORLD_SIZE - 18, WORLD_SIZE);
 
@@ -47,9 +37,28 @@ const Render = {
             rng.range(3.5, 6.5), 0, Math.PI * 2);
           g.fill();
         }
+        // Trees: a shadow, then a two-tone canopy.
+        for (let t = 0; t < 5; t++) {
+          const tx = rng.range(lot.x0 + 7, lot.x1 - 7), ty = rng.range(lot.y0 + 7, lot.y1 - 7);
+          const tr = rng.range(2.6, 4.2);
+          g.fillStyle = "rgba(0,0,0,0.20)";
+          g.beginPath(); g.arc(tx + 1.4, ty + 1.8, tr, 0, Math.PI * 2); g.fill();
+          g.fillStyle = "#3c6030";
+          g.beginPath(); g.arc(tx, ty, tr, 0, Math.PI * 2); g.fill();
+          g.fillStyle = "#4d7a3c";
+          g.beginPath(); g.arc(tx - tr * 0.25, ty - tr * 0.25, tr * 0.62, 0, Math.PI * 2); g.fill();
+        }
       } else if (block.kind === "beach") {
         g.fillStyle = "#c9b078";
         g.fillRect(lot.x0, lot.y0, lot.x1 - lot.x0, lot.y1 - lot.y0);
+        const rng = makeRng(block.i * 57 + block.j * 23 + City.seed);
+        for (let t = 0; t < 4; t++) {
+          const ux = rng.range(lot.x0 + 8, lot.x1 - 8), uy = rng.range(lot.y0 + 8, lot.y1 - 8);
+          g.fillStyle = "rgba(0,0,0,0.16)";
+          g.beginPath(); g.arc(ux + 1.2, uy + 1.6, 2.6, 0, Math.PI * 2); g.fill();
+          g.fillStyle = ["#e0483c", "#37a0e0", "#e8c33a", "#e07ba0"][t % 4];
+          g.beginPath(); g.arc(ux, uy, 2.4, 0, Math.PI * 2); g.fill();
+        }
       } else if (block.kind === "port") {
         g.fillStyle = "#676b62";
         g.fillRect(lot.x0, lot.y0, lot.x1 - lot.x0, lot.y1 - lot.y0);
@@ -62,10 +71,13 @@ const Render = {
       } else {
         g.fillStyle = block.district.ground;
         g.fillRect(lot.x0, lot.y0, lot.x1 - lot.x0, lot.y1 - lot.y0);
+        // Per-lot shade jitter, so a district reads as many plots of
+        const j = hash2(block.i * 3 + 1, block.j * 5 + 2, City.seed);
+        g.fillStyle = j > 0.5 ? `rgba(255,255,255,${(j - 0.5) * 0.10})` : `rgba(0,0,0,${(0.5 - j) * 0.12})`;
+        g.fillRect(lot.x0, lot.y0, lot.x1 - lot.x0, lot.y1 - lot.y0);
       }
     }
 
-    // The river, over the land base.
     const river = City.riverRect();
     const grad = g.createLinearGradient(river.x0, 0, river.x1, 0);
     grad.addColorStop(0, "#1d4258");
@@ -73,24 +85,20 @@ const Render = {
     grad.addColorStop(1, "#1d4258");
     g.fillStyle = grad;
     g.fillRect(river.x0, 0, river.x1 - river.x0, WORLD_SIZE);
-    // River banks.
     g.fillStyle = "#7c7663";
     g.fillRect(river.x0 - 2.5, 0, 2.5, WORLD_SIZE);
     g.fillRect(river.x1, 0, 2.5, WORLD_SIZE);
-    // The beach and the sea edge.
     g.fillStyle = "#c9b078";
     g.fillRect(WORLD_SIZE - 34, 0, 16, WORLD_SIZE);
     g.fillStyle = "#1a4066";
     g.fillRect(WORLD_SIZE - 18, 0, 18, WORLD_SIZE);
 
-    // Roads.
     for (let k = 0; k <= BLOCKS; k++) {
       const c = roadCenter(k), w = roadWidth(k), av = isAvenue(k);
       g.fillStyle = av ? "#3b4046" : "#33373c";
       g.fillRect(c - w / 2, 0, w, WORLD_SIZE);
       g.fillRect(0, c - w / 2, WORLD_SIZE, w);
     }
-    // Bridge decks over the river.
     for (const k of BRIDGE_ROWS) {
       const c = roadCenter(k), w = roadWidth(k);
       g.fillStyle = "#43484f";
@@ -99,7 +107,6 @@ const Render = {
       g.fillRect(river.x0 - 4, c - w / 2 - 1.2, river.x1 - river.x0 + 8, 1.2);
       g.fillRect(river.x0 - 4, c + w / 2, river.x1 - river.x0 + 8, 1.2);
     }
-    // Lane markings.
     g.strokeStyle = "rgba(232,232,220,0.55)";
     g.lineWidth = 0.35;
     g.setLineDash([4, 5]);
@@ -116,7 +123,6 @@ const Render = {
       }
     }
     g.setLineDash([]);
-    // Avenue medians: double yellow.
     g.strokeStyle = "rgba(232,180,40,0.8)";
     g.lineWidth = 0.4;
     for (let k = 0; k <= BLOCKS; k += 4) {
@@ -126,7 +132,6 @@ const Render = {
         g.beginPath(); g.moveTo(0, c + s); g.lineTo(WORLD_SIZE, c + s); g.stroke();
       }
     }
-    // Crosswalks at avenue junctions.
     g.fillStyle = "rgba(230,230,225,0.5)";
     for (let a = 0; a <= BLOCKS; a += 4) {
       for (let b = 0; b <= BLOCKS; b += 4) {
@@ -138,6 +143,20 @@ const Render = {
           g.fillRect(cx + s * 2.2 - 0.7, cy - w - 2.4, 1.4, 2.2);
           g.fillRect(cx + s * 2.2 - 0.7, cy + w + 0.2, 1.4, 2.2);
         }
+      }
+    }
+    // Road wear: patched tar and oil stains along the centrelines.
+    {
+      const rng = makeRng(City.seed * 31 + 7);
+      g.fillStyle = "rgba(0,0,0,0.13)";
+      for (let t = 0; t < 420; t++) {
+        const vert = rng.chance(0.5);
+        const k = rng.int(0, BLOCKS);
+        const c = roadCenter(k) + rng.range(-3.4, 3.4);
+        const along = rng.range(10, WORLD_SIZE - 10);
+        const w = rng.range(1.4, 4.2), h = rng.range(1, 2.6);
+        if (vert) g.fillRect(c - w / 2, along - h / 2, w, h);
+        else g.fillRect(along - h / 2, c - w / 2, h, w);
       }
     }
     // Palms: a top-down star of fronds and a shadow.
@@ -223,7 +242,6 @@ const Render = {
     const vw = VIEW_W / scale, vh = VIEW_H / scale; // visible metres
     const vx0 = cam.x - vw / 2, vy0 = cam.y - vh / 2;
 
-    // Ground.
     const S = 2;
     ctx.imageSmoothingEnabled = true;
     ctx.drawImage(this.staticLayer,
@@ -261,6 +279,67 @@ const Render = {
       else if (it.kind === "wheel") this._wheel(ctx, it.lm, scale, toX, toY, tNow);
     }
 
+    // Traffic lights at the avenue junctions: a corner post carrying
+    for (const li of City.lights) {
+      const x = toX(li.x), y = toY(li.y);
+      if (x < -30 || x > VIEW_W + 30 || y < -30 || y > VIEW_H + 30) continue;
+      const off = (Math.max(roadWidth(li.a), roadWidth(li.b)) / 2 + 1.4) * scale;
+      const px = x + off, py = y + off;
+      ctx.fillStyle = "#14161c";
+      ctx.fillRect(px - 4.5, py - 2.5, 9, 5);
+      const dot = (dx, st) => {
+        ctx.fillStyle = st === "green" ? "#3fe07a" : st === "amber" ? "#ffb000" : "#e0483c";
+        ctx.beginPath(); ctx.arc(px + dx, py, 1.7, 0, Math.PI * 2); ctx.fill();
+      };
+      dot(-2.2, City.lightState(li.a, li.b, true, world.time));
+      dot(2.2, City.lightState(li.a, li.b, false, world.time));
+    }
+
+    // Service and story markers on the ground: spray bays in pink,
+    if (world.state === "play") {
+      const ring = (wx, wy, color, r) => {
+        const x = toX(wx), y = toY(wy);
+        if (x < -30 || x > VIEW_W + 30 || y < -30 || y > VIEW_H + 30) return;
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 2;
+        ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke();
+      };
+      for (const s of City.sprays) ring(s.x, s.y, "rgba(255,125,216,0.75)", 5.5 * scale * 0.8);
+      for (const h of City.safehouses) ring(h.x, h.y, "rgba(78,224,122,0.7)", 4.5 * scale * 0.8);
+      for (const pk of City.packages) {
+        if (pk.got) continue;
+        const x = toX(pk.x), y = toY(pk.y);
+        if (x < -10 || x > VIEW_W + 10 || y < -10 || y > VIEW_H + 10) continue;
+        const pr = 2.4 + Math.sin(tNow * 3.4 + pk.x) * 0.7;
+        ctx.fillStyle = "#ffd76a";
+        ctx.beginPath(); ctx.arc(x, y, pr, 0, Math.PI * 2); ctx.fill();
+        ctx.fillStyle = "rgba(255,255,255,0.85)";
+        ctx.beginPath(); ctx.arc(x, y, pr * 0.4, 0, Math.PI * 2); ctx.fill();
+      }
+      if (world.waypoint) {
+        const x = toX(world.waypoint.x), y = toY(world.waypoint.y);
+        if (x > -20 && x < VIEW_W + 20 && y > -20 && y < VIEW_H + 20) {
+          ctx.strokeStyle = "#ff4fd8";
+          ctx.lineWidth = 2;
+          ctx.save();
+          ctx.translate(x, y - 8 + Math.sin(tNow * 2.6) * 2);
+          ctx.rotate(Math.PI / 4);
+          ctx.strokeRect(-5, -5, 10, 10);
+          ctx.restore();
+        }
+      }
+    }
+
+    // Spike strips across the bridge decks.
+    for (const s of world.spikes || []) {
+      const x = toX(s.x), y = toY(s.y), len = s.len * scale;
+      if (x < -20 || x > VIEW_W + 20 || y + len / 2 < 0 || y - len / 2 > VIEW_H) continue;
+      ctx.fillStyle = "#191b20";
+      ctx.fillRect(x - 0.8 * scale * 0.5, y - len / 2, 0.8 * scale, len);
+      ctx.fillStyle = "#e8c33a";
+      for (let sy = -len / 2 + 3; sy < len / 2 - 2; sy += 7) ctx.fillRect(x - 2, y + sy, 4, 3);
+    }
+
     // The mission marker: a column of gold light.
     const obj = Missions.objective(world);
     if (obj && obj.marker && world.state === "play") {
@@ -281,22 +360,73 @@ const Render = {
       }
     }
 
-    if (world.weather === "rain") this._rain(ctx, tNow);
+    // The helicopter rides above everything: shadow first, then the
+    if (world.heli) {
+      const h = world.heli;
+      const hx = toX(h.x), hy = toY(h.y);
+      ctx.fillStyle = "rgba(0,0,0,0.22)";
+      ctx.beginPath(); ctx.ellipse(hx + 16, hy + 20, 5.4 * scale, 2.2 * scale, h.ang, 0, Math.PI * 2); ctx.fill();
+      ctx.save();
+      ctx.translate(hx, hy);
+      ctx.rotate(h.ang);
+      ctx.fillStyle = "rgba(210,220,235,0.16)";
+      ctx.beginPath(); ctx.arc(0, 0, 5.6 * scale, 0, Math.PI * 2); ctx.fill();
+      ctx.strokeStyle = "rgba(230,238,248,0.5)";
+      ctx.lineWidth = 1.4;
+      const ra = tNow * 41;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(ra) * 5.6 * scale, Math.sin(ra) * 5.6 * scale);
+      ctx.lineTo(-Math.cos(ra) * 5.6 * scale, -Math.sin(ra) * 5.6 * scale);
+      ctx.stroke();
+      ctx.fillStyle = "#232833";
+      roundRectPath(ctx, -3.4 * scale, -1.15 * scale, 6.4 * scale, 2.3 * scale, 1.1 * scale);
+      ctx.fill();
+      ctx.fillRect(-7.6 * scale, -0.32 * scale, 4.4 * scale, 0.64 * scale);
+      ctx.fillStyle = "#3a6ea8";
+      roundRectPath(ctx, 1.2 * scale, -0.85 * scale, 1.9 * scale, 1.7 * scale, 3);
+      ctx.fill();
+      ctx.fillStyle = "#e0483c";
+      ctx.fillRect(-7.9 * scale, -0.9 * scale, 0.5 * scale, 1.8 * scale);
+      ctx.restore();
+    }
+    for (const tr of world.tracers) {
+      ctx.strokeStyle = `rgba(255,215,106,${clamp(tr.t / 0.14, 0, 1) * 0.85})`;
+      ctx.lineWidth = 1.6;
+      ctx.beginPath();
+      ctx.moveTo(toX(tr.x0), toY(tr.y0));
+      ctx.lineTo(toX(tr.x1), toY(tr.y1));
+      ctx.stroke();
+    }
+
+    if (world.weather === "rain" || world.weather === "storm") this._rain(ctx, tNow);
     this._lighting(ctx, world, cam, scale, toX, toY, tNow);
+    if (world.weather === "fog") {
+      const fg = ctx.createRadialGradient(VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.24, VIEW_W / 2, VIEW_H / 2, VIEW_H * 0.78);
+      fg.addColorStop(0, "rgba(196,204,216,0)");
+      fg.addColorStop(1, "rgba(196,204,216,0.52)");
+      ctx.fillStyle = fg;
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
+    if (world.lightningT > 0) {
+      ctx.fillStyle = `rgba(240,244,255,${world.lightningT * 2.4})`;
+      ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    }
   },
 
   _building(ctx, b, cam, scale, toX, toY, tNow, dark) {
     // Roof lean: away from the screen centre, scaled by height.
     const bcx = (b.x0 + b.x1) / 2, bcy = (b.y0 + b.y1) / 2;
-    const lean = 0.30 * b.h;
-    const ox = clamp(((bcx - cam.x) / (VIEW_W / 2 / PX_PER_M)) * lean, -16, 16);
-    const oy = clamp(((bcy - cam.y) / (VIEW_H / 2 / PX_PER_M)) * lean, -16, 16);
+    const lean = 0.42 * b.h;
+    const ox = clamp(((bcx - cam.x) / (VIEW_W / 2 / PX_PER_M)) * lean, -22, 22);
+    const oy = clamp(((bcy - cam.y) / (VIEW_H / 2 / PX_PER_M)) * lean, -22, 22);
     const x0 = toX(b.x0), y0 = toY(b.y0), x1 = toX(b.x1), y1 = toY(b.y1);
     const rx0 = x0 + ox * scale, ry0 = y0 + oy * scale;
     const rx1 = x1 + ox * scale, ry1 = y1 + oy * scale;
+    // A cast shadow on the ground, so towers sit in the city, not on it.
+    ctx.fillStyle = "rgba(10,8,22,0.20)";
+    ctx.fillRect(x0 + 7 * scale, y0 + 9 * scale, x1 - x0, y1 - y0);
 
     // Walls: only the two faces turned toward the viewer get drawn, and
-    // tall faces carry a window grid so the height reads.
     const winFace = (ax, ay, bx, by, cx2, cy2, dx2, dy2, wallH) => {
       ctx.fillStyle = shade(b.wall, 0.62);
       ctx.beginPath();
@@ -304,7 +434,7 @@ const Render = {
       ctx.closePath(); ctx.fill();
       const wallPx = Math.abs(wallH);
       if (b.h < 9 || wallPx < 9) return;
-      const rows = clamp(Math.floor(b.h / 7), 1, 5);
+      const rows = clamp(Math.floor(b.h / 6), 1, 7);
       const cols = clamp(Math.floor(Math.hypot(bx - ax, by - ay) / scale / 6), 2, 10);
       for (let rI = 1; rI <= rows; rI++) {
         const t = rI / (rows + 1);
@@ -323,8 +453,8 @@ const Render = {
     if (ox > 0.2) winFace(x1, y0, x1, y1, rx1, ry1, rx1, ry0, ox * scale);
     else if (ox < -0.2) winFace(x0, y0, x0, y1, rx0, ry1, rx0, ry0, ox * scale);
 
-    // Roof: a parapet edge around a panel in the wall's own family.
-    ctx.fillStyle = b.kind === "house" ? "#7a4a38" : shade(b.wall, 0.9);
+    // Roof: a parapet edge around a panel in the wall's own family,
+    ctx.fillStyle = b.kind === "house" ? "#7a4a38" : shade(b.wall, 0.8 + hash2(b.x0, b.y0, 9) * 0.28);
     ctx.fillRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
     ctx.strokeStyle = "rgba(0,0,0,0.35)";
     ctx.lineWidth = 1.4;
@@ -334,6 +464,15 @@ const Render = {
     const inset = Math.min(5, (rx1 - rx0) * 0.14, (ry1 - ry0) * 0.14);
     if (inset > 1.6) ctx.strokeRect(rx0 + inset, ry0 + inset, rx1 - rx0 - inset * 2, ry1 - ry0 - inset * 2);
     const rw = rx1 - rx0, rh = ry1 - ry0;
+    // Panel seams across a big roof, so it reads as a built surface.
+    if (rw > 30 * scale || rh > 30 * scale) {
+      ctx.strokeStyle = "rgba(0,0,0,0.10)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      if (rw > 30 * scale) { ctx.moveTo(rx0 + rw / 2, ry0 + 1); ctx.lineTo(rx0 + rw / 2, ry1 - 1); }
+      if (rh > 30 * scale) { ctx.moveTo(rx0 + 1, ry0 + rh / 2); ctx.lineTo(rx1 - 1, ry0 + rh / 2); }
+      ctx.stroke();
+    }
     if (b.kind === "stadium") {
       ctx.fillStyle = "#4c7a3f";
       ctx.fillRect(rx0 + rw * 0.18, ry0 + rh * 0.2, rw * 0.64, rh * 0.6);
@@ -363,16 +502,57 @@ const Render = {
       const hue = (hash2(b.x0, b.y0, 3) * 4) | 0;
       ctx.fillStyle = ["#ff4fd8", "#37e0ff", "#ffb000", "#7dff5e"][hue];
       ctx.fillRect(rx0 + 2, ry1 - 3.4, rw - 4, 2.2);
-    } else if (b.h >= 12 && rw > 26 && rh > 26) {
-      // Roof furniture on the bigger roofs: a plant box and a water tank.
-      ctx.fillStyle = "rgba(0,0,0,0.28)";
-      ctx.fillRect(rx0 + rw * 0.16, ry0 + rh * 0.16, rw * 0.24, rh * 0.2);
+    } else if (b.h >= 100) {
+      // The Ámbar Tower's crown: a helipad over a raised penthouse.
+      ctx.fillStyle = shade(b.wall, 1.12);
+      ctx.fillRect(rx0 + rw * 0.2, ry0 + rh * 0.2, rw * 0.6, rh * 0.6);
+      ctx.strokeStyle = "rgba(255,255,255,0.75)";
+      ctx.lineWidth = 1.6;
+      ctx.beginPath(); ctx.arc(rx0 + rw / 2, ry0 + rh / 2, Math.min(rw, rh) * 0.21, 0, Math.PI * 2); ctx.stroke();
+      ctx.fillStyle = "rgba(255,255,255,0.85)";
+      ctx.font = "bold " + Math.round(Math.min(rw, rh) * 0.24) + "px Verdana, sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("H", rx0 + rw / 2, ry0 + rh / 2 + Math.min(rw, rh) * 0.085);
+    } else if (b.district === "orilla" && b.h >= 10 && rw > 30 && rh > 30) {
+      // A hotel pool, turquoise against the pastel roof.
+      ctx.fillStyle = "#e8e2d4";
+      ctx.fillRect(rx0 + rw * 0.14, ry0 + rh * 0.14, rw * 0.44, rh * 0.4);
+      ctx.fillStyle = "#2fa8c8";
+      ctx.fillRect(rx0 + rw * 0.17, ry0 + rh * 0.17, rw * 0.38, rh * 0.34);
+      ctx.fillStyle = "rgba(255,255,255,0.35)";
+      ctx.fillRect(rx0 + rw * 0.2, ry0 + rh * 0.2, rw * 0.3, rh * 0.08);
+    } else if (b.kind === "house") {
+      // Suburban solar panels, angled dark glass.
+      ctx.fillStyle = "#1d2c4a";
+      ctx.fillRect(rx0 + rw * 0.16, ry0 + rh * 0.18, rw * 0.42, rh * 0.36);
+      ctx.strokeStyle = "rgba(140,180,230,0.5)";
+      ctx.lineWidth = 1;
+      ctx.strokeRect(rx0 + rw * 0.16, ry0 + rh * 0.18, rw * 0.42, rh * 0.36);
       ctx.beginPath();
-      ctx.arc(rx0 + rw * 0.72, ry0 + rh * 0.66, Math.min(4.5, rw * 0.09), 0, Math.PI * 2);
+      ctx.moveTo(rx0 + rw * 0.37, ry0 + rh * 0.18); ctx.lineTo(rx0 + rw * 0.37, ry0 + rh * 0.54);
+      ctx.stroke();
+    } else if (b.h >= 12 && rw > 24 && rh > 24) {
+      // Roof furniture: AC plant with a lit top face, a water tank, and
+      const ac = (fx, fy, fw, fh) => {
+        ctx.fillStyle = "rgba(0,0,0,0.30)";
+        ctx.fillRect(rx0 + rw * fx + 1.5, ry0 + rh * fy + 2, rw * fw, rh * fh);
+        ctx.fillStyle = shade(b.wall, 1.18);
+        ctx.fillRect(rx0 + rw * fx, ry0 + rh * fy, rw * fw, rh * fh);
+      };
+      ac(0.14, 0.14, 0.22, 0.18);
+      ac(0.6, 0.58, 0.16, 0.14);
+      ctx.fillStyle = "rgba(0,0,0,0.26)";
+      ctx.beginPath();
+      ctx.arc(rx0 + rw * 0.74, ry0 + rh * 0.24, Math.min(4.5, rw * 0.08), 0, Math.PI * 2);
       ctx.fill();
+      if (b.h >= 40) {
+        ctx.fillStyle = shade(b.wall, 1.08);
+        ctx.fillRect(rx0 + rw * 0.34, ry0 + rh * 0.36, rw * 0.3, rh * 0.28);
+        ctx.strokeStyle = "rgba(255,255,255,0.14)";
+        ctx.strokeRect(rx0 + rw * 0.34, ry0 + rh * 0.36, rw * 0.3, rh * 0.28);
+      }
     }
     // Generic roof clutter — vents and a skylight — so a big flat roof
-    // reads as a roof and not a void.
     if (rw > 34 && rh > 34 && b.kind !== "stadium" && b.kind !== "crane" && b.kind !== "lighthouse") {
       ctx.fillStyle = "rgba(0,0,0,0.20)";
       const n = 2 + Math.floor(hash2(b.x0, b.y0, 5) * 3);
@@ -388,7 +568,6 @@ const Render = {
 
   _car(ctx, car, scale, toX, toY, tNow) {
     const x = toX(car.x), y = toY(car.y);
-    // Shadow.
     ctx.fillStyle = "rgba(0,0,0,0.30)";
     ctx.beginPath();
     ctx.ellipse(x + 2.5, y + 3.5, car.def.len * scale * 0.52, car.def.wid * scale * 0.55, car.ang, 0, Math.PI * 2);
@@ -399,9 +578,15 @@ const Render = {
     ctx.rotate(car.ang);
     if (car.sunk) ctx.globalAlpha = 0.45;
     ctx.drawImage(spr, -spr.width / 2, -spr.height / 2);
+    // Scuffed panels once a car has taken real hits.
+    if (car.damage > 35 && !car.sunk) {
+      const L = car.def.len * SPRITE_SCALE, W = car.def.wid * SPRITE_SCALE;
+      ctx.fillStyle = "rgba(18,14,10,0.38)";
+      ctx.fillRect(L * 0.16, -W * 0.44, L * 0.2, W * 0.3);
+      if (car.damage > 70) ctx.fillRect(-L * 0.42, W * 0.08, L * 0.24, W * 0.34);
+    }
     ctx.restore();
     ctx.globalAlpha = 1;
-    // Brake lights.
     if (car.brakeLight > 0) {
       ctx.fillStyle = "rgba(255,60,40,0.85)";
       const bx = -Math.cos(car.ang) * car.def.len * scale * 0.5;
@@ -410,7 +595,6 @@ const Render = {
       ctx.beginPath(); ctx.arc(x + bx + px * 3, y + by + py * 3, 1.8, 0, Math.PI * 2); ctx.fill();
       ctx.beginPath(); ctx.arc(x + bx - px * 3, y + by - py * 3, 1.8, 0, Math.PI * 2); ctx.fill();
     }
-    // Damage smoke.
     if (car.damage > 55 && !car.sunk) {
       const ph = (tNow * 1.4 + car.id * 0.7) % 1;
       ctx.fillStyle = `rgba(70,70,76,${0.35 * (1 - ph)})`;
@@ -514,11 +698,9 @@ const Render = {
       lg.fillStyle = gr;
       lg.fillRect(x - r, y - r, r * 2, r * 2);
     };
-    // Lamp pools along the avenues.
     for (const lamp of City.lamps) {
       glow(toX(lamp.x), toY(lamp.y), 38, "rgba(255,190,110,A)", 0.13);
     }
-    // Headlight cones and police flashers.
     for (const car of world.cars) {
       if (car.sunk) continue;
       const x = toX(car.x), y = toY(car.y);
@@ -531,6 +713,10 @@ const Render = {
         const phase = Math.sin(tNow * 9 + car.id * 2.1) > 0;
         glow(x, y, 36, phase ? "rgba(255,60,50,A)" : "rgba(70,110,255,A)", 0.17);
       }
+    }
+    // The helicopter's searchlight pools on the street below it.
+    if (world.heli) {
+      glow(toX(world.heli.x), toY(world.heli.y), 58, "rgba(255,246,220,A)", 0.15);
     }
     // Neon signs bleed colour onto their streets.
     City.grid.query(cam.x, cam.y, 130, (b) => {

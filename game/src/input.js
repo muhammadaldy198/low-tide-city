@@ -1,9 +1,5 @@
 "use strict";
 // Low Tide City — keyboard input with edge detection.
-//
-// `keys` holds the live state by semantic action; `pressed` holds actions
-// that went down since the last simulation step, so one physical press is
-// consumed exactly once even at a fixed timestep.
 
 const Input = {
   keys: Object.create(null),
@@ -19,6 +15,7 @@ const Input = {
     KeyM: "map",
     KeyP: "pause", Escape: "pause",
     Enter: "confirm",
+    Tab: "jobs",
   },
   init() {
     addEventListener("keydown", (e) => {
@@ -26,7 +23,7 @@ const Input = {
       if (!a) return;
       if (!this.keys[a]) this.pressed[a] = true;
       this.keys[a] = true;
-      if (a === "up" || a === "down" || a === "left" || a === "right" || a === "handbrake") {
+      if (a === "up" || a === "down" || a === "left" || a === "right" || a === "handbrake" || a === "jobs") {
         e.preventDefault();
       }
     });

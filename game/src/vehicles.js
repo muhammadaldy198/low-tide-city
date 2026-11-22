@@ -1,12 +1,5 @@
 "use strict";
 // Low Tide City — vehicles: factory, arcade physics, collisions.
-//
-// The driving model splits velocity into forward and lateral parts in the
-// car's own frame. The engine pushes the forward part (with a soft cap so
-// cars ease into their top speed), drag bleeds it, and the tyres scrub the
-// lateral part away at the type's grip rate — drop the grip (handbrake)
-// and the car slides. Collisions are three circles per car against
-// building AABBs and other cars' circles, resolved with impulses.
 
 let _carId = 1;
 
@@ -25,6 +18,7 @@ function makeCar(type, x, y, ang, color) {
     damage: 0,
     dead: false,
     sunk: false,
+    spiked: false,     // tyres shredded on a spike strip, until repaired
     brakeLight: 0,     // seconds of braking left to show
     honk: 0,
   };
@@ -50,7 +44,6 @@ const _circlesA = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 
 const _circlesB = [{ x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 0 }, { x: 0, y: 0, r: 0 }];
 
 // ctrl: {throttle: -1..1, steer: -1..1, handbrake: bool}
-// events: array receiving {kind:"crash", car, other, impulse, x, y}
 function stepCar(car, ctrl, dt, events) {
   if (car.sunk) return;
   const def = car.def;
@@ -60,11 +53,10 @@ function stepCar(car, ctrl, dt, events) {
   let vl = -car.vx * s + car.vy * c;
 
   const wrecked = car.damage >= 100;
-  const topSpeed = wrecked ? 7 : def.maxSpd;
+  const topSpeed = (wrecked ? 7 : def.maxSpd) * (car.spiked ? 0.5 : 1);
   const throttle = ctrl.throttle || 0;
 
   // Engine: full push at a standstill, fading as speed nears the cap;
-  // reverse is capped at 30% of top speed.
   if (throttle > 0) {
     const soft = Math.max(0, 1 - (vf / topSpeed) * (vf / topSpeed));
     vf += def.accel * (wrecked ? 0.35 : 1) * soft * throttle * dt * 3.2;
@@ -82,8 +74,7 @@ function stepCar(car, ctrl, dt, events) {
   if (throttle === 0) vf -= Math.sign(vf) * Math.min(Math.abs(vf), 1.6 * dt);
 
   // Tyres scrub lateral velocity; the handbrake loosens them and sharpens
-  // the yaw, which is what makes the car slide.
-  const grip = ctrl.handbrake ? def.grip * 0.32 : def.grip;
+  const grip = (ctrl.handbrake ? def.grip * 0.32 : def.grip) * GRIP_MUL * (car.spiked ? 0.55 : 1);
   vl *= Math.exp(-grip * dt);
 
   // Steering: smoothed input, authority grows with speed then fades.
@@ -150,7 +141,6 @@ function registerCrash(car, other, impulse, events) {
 }
 
 // Car-vs-car: circle pairs with a mass-weighted impulse. Called by
-// world.js for nearby pairs only.
 function collideCars(a, b, events) {
   const ca = carCircles(a, _circlesA);
   const cb = carCircles(b, _circlesB);

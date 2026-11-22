@@ -1,11 +1,5 @@
 "use strict";
 // Low Tide City — screenshot staging.
-//
-// The dossier's screenshots are the game's evidence, so each one is a real
-// scene played by the real simulation: the world is built from the seed,
-// the cast is placed, scripted inputs drive a fixed number of fixed steps,
-// and the camera is parked. Nothing is drawn by hand; when the frame is
-// ready the page sets window.__shotReady for the capture harness.
 
 const Shots = {
   stage(name, world) {
@@ -64,6 +58,8 @@ const Shots = {
     world.cars.push(oncoming);
     world.heat = 400; // three stars
     world.stars = 3;
+    // The helicopter is already on station, searchlight swinging in.
+    world.heli = { x: car.x + 15, y: car.y - 19, vx: 0, vy: -12, ang: -Math.PI / 2, fireT: 2.5 };
     this._run(world, 30, (s) => {
       Input.keys.up = true;
       Input.keys.right = s > 9 && s < 25;
@@ -103,7 +99,7 @@ const Shots = {
     for (let i = 0; i < 9; i++) Peds.spawn(world, world.rng);
     this._run(world, 30, () => { Input.keys.up = true; });
     const c = world.player.car;
-    return { x: c.x, y: c.y + 4, zoom: 1.05 };
+    return { x: c.x - 16, y: c.y + 4, zoom: 1.05 };
   },
 
   _chase(world) {
@@ -126,9 +122,10 @@ const Shots = {
       cop.ai = { mode: "hunt", searchT: 0, sx: car.x, sy: car.y, stuckT: 0, reverseT: 0, lx: cop.x, ly: cop.y };
       world.cars.push(cop);
     }
-    world.heat = 420;
-    world.stars = 3;
-    this._run(world, 26, () => { Input.keys.up = true; });
+    world.heat = 900; // five stars: the full response
+    world.stars = 5;
+    world.heli = { x: midX - 6, y: cy - 44, vx: 10, vy: 0, ang: 0, fireT: 2.5 };
+    this._run(world, 30, () => { Input.keys.up = true; });
     const c = world.player.car;
     return { x: c.x + 20, y: c.y - 4, zoom: 1.08 };
   },
@@ -136,40 +133,38 @@ const Shots = {
   _mission(world) {
     world.hours = 18.55;
     world.weather = "clear";
-    // Wheels Up, mid-run: the Corvo is out of the docks and pointed at
-    // Centro, the objective and the GPS on screen.
+    // Hot Cargo, mid-run: the loaded van is out of the docks, running
     const p = world.player;
     p.x = City.dockPos.x; p.y = City.dockPos.y + 2;
-    Missions.start(world, MISSION_WHEELS_UP);
+    Missions.start(world, MISSIONS[1]);
     world.dialogue = null;
     Missions.active.i = 1; // dialogue heard; now the enterVehicle step
-    Missions._enter(world); // binds the mission car
-    const mc = world.missionCar;
-    // Marisol handed over the keys: no theft, no heat.
+    Missions._enter(world); // spawns and binds the cargo van
+    const mc = Missions.active.car;
     mc.parked = false;
     mc.driver = "player";
     p.car = mc;
     p.x = mc.x; p.y = mc.y; p.ang = mc.ang;
     world.state = "play";
-    Missions.update(world, DT); // enterVehicle step completes -> goto
-    // The Corvo has pulled out of the dock lot and is running north on
-    // road 11 toward the river crossing, traffic around it.
-    mc.x = roadCenter(11) + City.laneOffset(11);
-    mc.y = 1186;
-    mc.ang = -Math.PI / 2;
-    mc.vy = -13; mc.vx = 0;
+    Missions.update(world, DT); // enterVehicle step completes -> deliver
+    // The van is running south on road 11, home toward the port.
+    mc.x = roadCenter(11) - City.laneOffset(11);
+    mc.y = 1062;
+    mc.ang = Math.PI / 2;
+    mc.vy = 13; mc.vx = 0;
+    mc.damage = 18; // a scuffed wing: the cargo rules are in play
     p.x = mc.x; p.y = mc.y; p.ang = mc.ang;
-    const ahead = makeCar("compact", mc.x, 1128, -Math.PI / 2, "#3f9e58");
-    ahead.driver = "traffic"; ahead.vy = -10;
-    ahead.ai = { leg: { vertical: true, k: 11, dir: -1 }, path: [], pathI: 0 };
+    const ahead = makeCar("compact", mc.x, 1124, Math.PI / 2, "#3f9e58");
+    ahead.driver = "traffic"; ahead.vy = 10;
+    ahead.ai = { leg: { vertical: true, k: 11, dir: 1 }, path: [], pathI: 0 };
     Traffic._extendPath(ahead, world.rng);
     world.cars.push(ahead);
-    const south = makeCar("van", roadCenter(11) - City.laneOffset(11), 1136, Math.PI / 2, "#9fb6c9");
-    south.driver = "traffic"; south.vy = 10;
-    south.ai = { leg: { vertical: true, k: 11, dir: 1 }, path: [], pathI: 0 };
+    const south = makeCar("van", roadCenter(11) + City.laneOffset(11), 1150, -Math.PI / 2, "#9fb6c9");
+    south.driver = "traffic"; south.vy = -10;
+    south.ai = { leg: { vertical: true, k: 11, dir: -1 }, path: [], pathI: 0 };
     Traffic._extendPath(south, world.rng);
     world.cars.push(south);
-    this._run(world, 40, () => { Input.keys.up = true; });
+    this._run(world, 215, () => { Input.keys.up = true; });
     const c = world.player.car || mc;
     return { x: c.x, y: c.y, zoom: 1.1 };
   },

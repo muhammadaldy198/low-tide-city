@@ -1,8 +1,5 @@
 "use strict";
 // Low Tide City — world constants and tuning tables.
-//
-// Units: 1 unit = 1 metre, angles in radians (0 = east). The simulation
-// step is fixed at 1/60 s. Screen space flips y; render.js owns that.
 
 const DT = 1 / 60;
 const VIEW_W = 1280;
@@ -10,7 +7,6 @@ const VIEW_H = 720;
 const PX_PER_M = 8; // at zoom 1
 
 // City grid: 14x14 blocks on a 96 m pitch. Road centrelines sit at
-// 48 + k*96 for k in 0..14; every fourth road is an avenue.
 const BLOCKS = 14;
 const PITCH = 96;
 const ROAD_OFF = 48;
@@ -33,7 +29,6 @@ const DISTRICTS = [
 ];
 
 // Vehicle types: length/width in metres, top speed m/s, engine m/s^2.
-// grip is the lateral velocity decay rate; turn is steering authority.
 const VEHICLE_TYPES = {
   compact: { name: "Brisa",     len: 3.9, wid: 1.8, maxSpd: 34, accel: 7.5,  grip: 7.0, turn: 2.6, mass: 1.0 },
   sedan:   { name: "Corvo",     len: 4.7, wid: 1.9, maxSpd: 38, accel: 7.0,  grip: 6.5, turn: 2.4, mass: 1.2 },
@@ -55,6 +50,20 @@ const CRIME = {
   hitPed: 20, stealParked: 30, carjack: 60, assault: 25, killPed: 90,
   damageCop: 50, stealCop: 150, killCop: 250, crashProp: 8, hitCar: 10,
 };
+
+// Progression: respect thresholds and the title each rank carries.
+const RANKS = [
+  [0, "Nobody"], [60, "Street Runner"], [160, "Wheelman"],
+  [320, "Fixer"], [560, "Legend of Puerto Ámbar"],
+];
+function rankFor(respect) {
+  let r = 0;
+  for (let i = 0; i < RANKS.length; i++) if (respect >= RANKS[i][0]) r = i;
+  return r;
+}
+
+// Weather grip multiplier, set by world.js each step (rain loosens tyres).
+let GRIP_MUL = 1;
 
 // Clock: a full day lasts 16 real minutes; the game opens at 17:30.
 const DAY_SECONDS = 16 * 60;

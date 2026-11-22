@@ -1,10 +1,5 @@
 "use strict";
 // Low Tide City — HUD and screens.
-//
-// In play: cash, clock and wanted stars top-right; health and the minimap
-// bottom-left; speed bottom-right in a car; the objective across the top;
-// dialogue, prompts and banners as they happen. Around play: the title
-// screen, the how-to panel, pause, and the BUSTED / WASTED overlays.
 
 const Hud = {
   menuIndex: 0,
@@ -27,10 +22,20 @@ const Hud = {
     ctx.stroke();
   },
 
+  // The title menu adapts to whether a save exists.
+  menuItems(world) {
+    const items = [];
+    if (world.hasSave()) items.push({ id: "continue", label: "Continue" });
+    items.push({ id: "new", label: "New Game" });
+    items.push({ id: "howto", label: "How to Play" });
+    return items;
+  },
+
   draw(ctx, world, tNow) {
     if (world.state === "title") return this._title(ctx, world, tNow, false);
     if (world.state === "howto") return this._title(ctx, world, tNow, true);
     this._hud(ctx, world, tNow);
+    if (world.selectOpen) this._select(ctx, world);
     if (world.state === "pause") this._pause(ctx, world);
     if (world.state === "busted") this._endScreen(ctx, "BUSTED", "#e0483c", "The Policía Municipal got their collar.");
     if (world.state === "wasted") this._endScreen(ctx, "WASTED", "#c8ccd4", "You wake up at the hospital, lighter by $100.");
@@ -56,9 +61,16 @@ const Hud = {
     ctx.fillStyle = "rgba(240,240,235,0.9)";
     const district = City.districtAt(p.x, p.y).name;
     ctx.fillText(
-      String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0") + "  ·  " + district +
-      (world.respect > 0 ? "  ·  ★ " + world.respect : ""),
+      String(hh).padStart(2, "0") + ":" + String(mm).padStart(2, "0") + "  ·  " + district,
       VIEW_W - 22, 108);
+    // Rank and progress toward the next one.
+    const rk = rankFor(world.respect);
+    ctx.font = "bold 13px Verdana, sans-serif";
+    ctx.fillStyle = "rgba(255,214,140,0.95)";
+    ctx.fillText(
+      "RANK " + (rk + 1) + " · " + RANKS[rk][1].toUpperCase() +
+      (rk < RANKS.length - 1 ? "  ·  " + world.respect + " / " + RANKS[rk + 1][0] : ""),
+      VIEW_W - 22, 130);
 
     // District toast on crossing a border.
     if (district !== this.lastDistrict) {
@@ -95,22 +107,35 @@ const Hud = {
       ctx.fillText("km/h · " + p.car.def.name, VIEW_W - 22, VIEW_H - 24);
     }
 
-    // Objective across the top.
+    // Objective across the top, with counters and clocks where a step
     const obj = Missions.objective(world);
     if (obj && world.state === "play") {
       ctx.font = "16px Verdana, sans-serif";
-      const wText = ctx.measureText(obj.text).width + 90;
+      let label = obj.text;
+      if (obj.count) label += "  ·  " + obj.count;
+      if (obj.timer != null) {
+        const s = Math.max(0, Math.ceil(obj.timer));
+        label += "  ·  " + Math.floor(s / 60) + ":" + String(s % 60).padStart(2, "0");
+      }
+      if (obj.marker) {
+        const d = Math.round(Math.hypot(obj.marker.x - p.x, obj.marker.y - p.y));
+        label += "  ·  " + d + " m";
+      }
+      const wText = ctx.measureText(label).width + 44;
       ctx.fillStyle = "rgba(8,10,16,0.62)";
       roundRectPath(ctx, VIEW_W / 2 - wText / 2, 14, wText, 34, 8);
       ctx.fill();
       ctx.textAlign = "center";
       ctx.fillStyle = "#ffd76a";
-      let label = obj.text;
-      if (obj.marker) {
-        const d = Math.round(Math.hypot(obj.marker.x - p.x, obj.marker.y - p.y));
-        label += "  ·  " + d + " m";
-      }
       ctx.fillText(label, VIEW_W / 2, 37);
+    }
+
+    // Toasts: money and moments, under the objective.
+    if (world.toast && world.state === "play") {
+      ctx.textAlign = "center";
+      ctx.font = "bold 16px Verdana, sans-serif";
+      ctx.fillStyle = "rgba(255,224,160,0.97)";
+      ctx.fillText(world.toast.text, VIEW_W / 2, 72);
     }
 
     // Mission banner and result cards.
@@ -208,6 +233,16 @@ const Hud = {
         blip(car.x, car.y, Math.sin(tNow * 9 + car.id) > 0 ? "#ff5040" : "#4f7dff", 3);
       }
     }
+    for (const s of City.sprays) blip(s.x, s.y, "#ff7dd8", 3);
+    for (const h2 of City.safehouses) blip(h2.x, h2.y, "#4ee07a", 3);
+    if (world.heli) blip(world.heli.x, world.heli.y, "#ff5040", 3.6);
+    if (world.waypoint) blip(world.waypoint.x, world.waypoint.y, "#ff4fd8", 3.6);
+    if (!Missions.active) {
+      for (const key of Object.keys(City.givers)) {
+        const g = City.givers[key];
+        if (g && Missions.forGiver(world, key)) blip(g.x, g.y, "#ffb000", 3.4);
+      }
+    }
     // Player arrow.
     const px = toMapX(world.player.x), py = toMapY(world.player.y);
     const ang = world.player.car ? world.player.car.ang : world.player.ang;
@@ -256,13 +291,14 @@ const Hud = {
       ctx.fillStyle = "#f2f2ee";
       const lines = [
         "WASD / arrows — walk and drive",
-        "Shift — sprint on foot",
+        "Shift — sprint on foot · Space — handbrake",
         "E — enter / leave a car, talk, confirm",
-        "Space — handbrake",
+        "Tab — the phone: missions, ranks, waypoints",
         "P / Esc — pause",
         "",
-        "Start at Marisol's dock office in Los Muelles (gold marker).",
-        "Stars bring the Policía. Break their sight to cool the heat.",
+        "Work glows gold on the map. Spray Rápido (pink) cools a hot car.",
+        "Stars bring the Policía — and at three, their helicopter.",
+        "Witnesses call crimes in. Scare them off and the heat never lands.",
       ];
       lines.forEach((ln, i) => ctx.fillText(ln, VIEW_W / 2 - 268, 372 + i * 25));
       ctx.textAlign = "center";
@@ -272,26 +308,69 @@ const Hud = {
       return;
     }
 
-    const items = ["New Game", "How to Play"];
+    const items = this.menuItems(world);
     this.menuRects = [];
     ctx.font = "bold 25px Verdana, sans-serif";
-    items.forEach((label, i) => {
+    items.forEach((item, i) => {
       const y = 396 + i * 52;
-      this.menuRects.push({ x: VIEW_W / 2 - 130, y: y - 30, w: 260, h: 40, index: i });
+      this.menuRects.push({ x: VIEW_W / 2 - 130, y: y - 30, w: 260, h: 40, index: item.id, n: i });
       if (i === this.menuIndex) {
         ctx.fillStyle = "rgba(255,176,0,0.16)";
         roundRectPath(ctx, VIEW_W / 2 - 130, y - 30, 260, 40, 8);
         ctx.fill();
         ctx.fillStyle = "#ffb000";
-        ctx.fillText("▸ " + label + " ◂", VIEW_W / 2, y);
+        ctx.fillText("▸ " + item.label + " ◂", VIEW_W / 2, y);
       } else {
         ctx.fillStyle = "rgba(240,240,235,0.88)";
-        ctx.fillText(label, VIEW_W / 2, y);
+        ctx.fillText(item.label, VIEW_W / 2, y);
       }
     });
     ctx.font = "13px Verdana, sans-serif";
     ctx.fillStyle = "rgba(240,240,235,0.55)";
     ctx.fillText("↑ ↓ choose · Enter select — or click", VIEW_W / 2, 530);
+  },
+
+  // The phone: every mission, its state, and a waypoint for the giver.
+  _select(ctx, world) {
+    const list = Missions.list(world);
+    ctx.fillStyle = "rgba(6,8,14,0.72)";
+    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+    const x0 = VIEW_W / 2 - 300, y0 = 108, rowH = 33;
+    ctx.fillStyle = "rgba(10,13,22,0.94)";
+    roundRectPath(ctx, x0, y0, 600, 66 + list.length * rowH, 12);
+    ctx.fill();
+    ctx.textAlign = "left";
+    ctx.font = "bold 21px Georgia, serif";
+    ctx.fillStyle = "#ffd76a";
+    ctx.fillText("WORK — PUERTO ÁMBAR", x0 + 24, y0 + 38);
+    ctx.font = "13px Verdana, sans-serif";
+    ctx.fillStyle = "rgba(240,240,235,0.6)";
+    ctx.fillText("Packages " + world.packagesGot + " / 20 · Rank " + (rankFor(world.respect) + 1), x0 + 330, y0 + 38);
+    list.forEach((row, i) => {
+      const y = y0 + 66 + i * rowH + 22;
+      if (i === Missions.selectIdx) {
+        ctx.fillStyle = "rgba(255,176,0,0.16)";
+        roundRectPath(ctx, x0 + 10, y - 21, 580, 28, 6);
+        ctx.fill();
+      }
+      ctx.font = "15px Verdana, sans-serif";
+      ctx.fillStyle = row.state === "done" ? "rgba(120,220,150,0.9)" : "#f2f2ee";
+      ctx.fillText((i === Missions.selectIdx ? "▸ " : "  ") + row.def.title, x0 + 22, y);
+      ctx.fillStyle = "rgba(240,240,235,0.55)";
+      ctx.fillText(row.def.giverName, x0 + 268, y);
+      ctx.textAlign = "right";
+      ctx.fillStyle = row.state === "ready" ? "#ffd76a" : "rgba(240,240,235,0.55)";
+      ctx.fillText(
+        row.state === "done" ? "DONE" : row.state === "locked" ? "LOCKED"
+          : row.state === "ready" ? "$" + row.def.reward.cash : row.state.toUpperCase(),
+        x0 + 576, y);
+      ctx.textAlign = "left";
+    });
+    ctx.textAlign = "center";
+    ctx.font = "13px Verdana, sans-serif";
+    ctx.fillStyle = "rgba(240,240,235,0.6)";
+    ctx.fillText("↑ ↓ choose · Enter — waypoint to the giver · Tab — close",
+      VIEW_W / 2, y0 + 66 + list.length * rowH + 26);
   },
 
   _pause(ctx, world) {

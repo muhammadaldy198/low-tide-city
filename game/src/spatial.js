@@ -1,6 +1,5 @@
 "use strict";
 // Low Tide City — spatial helpers: a uniform grid hash for broad-phase
-// queries, and the circle-vs-AABB test every collision in the game uses.
 
 function makeGrid(cellSize) {
   const cells = new Map();
@@ -31,7 +30,6 @@ function makeGrid(cellSize) {
 }
 
 // Circle (cx, cy, r) against an axis-aligned box. Returns null when clear,
-// otherwise the smallest push-out vector {x, y, depth} separating them.
 function circleVsAabb(cx, cy, r, b) {
   const nx = Math.max(b.x0, Math.min(cx, b.x1));
   const ny = Math.max(b.y0, Math.min(cy, b.y1));

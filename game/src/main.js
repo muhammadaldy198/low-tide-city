@@ -1,13 +1,5 @@
 "use strict";
 // Low Tide City — bootstrap and game loop.
-//
-// Two ways in:
-//   * plain open: the title screen over a living city, then play.
-//   * ?shot=<name>&seed=<n>: stage one deterministic scene (shots.js),
-//     paint it, and set window.__shotReady for the capture harness.
-//
-// The simulation runs on a fixed 1/60 step with an accumulator; rendering
-// happens once per animation frame.
 
 (function () {
   const canvas = document.getElementById("game");
@@ -46,7 +38,7 @@
     if (world.state === "title") {
       for (const rect of Hud.menuRects) {
         if (mouseX >= rect.x && mouseX <= rect.x + rect.w && mouseY >= rect.y && mouseY <= rect.y + rect.h) {
-          Hud.menuIndex = rect.index;
+          Hud.menuIndex = rect.n;
         }
       }
     }
@@ -60,21 +52,30 @@
     }
   });
 
-  function activateMenu(index) {
-    if (index === 0) {
-      world.state = "play";
-      world.banner = { text: "Low Tide City", sub: "Find Marisol at the docks — follow the gold marker", t: 3.6 };
-    } else {
-      world.state = "howto";
+  function activateMenu(id) {
+    if (id === "howto") { world.state = "howto"; return; }
+    if (id === "new") {
+      world.clearSave();
+      World.build(seed, true); // same seed, same city; a clean slate
     }
+    if (id === "continue") {
+      const h = City.safehouses[0];
+      world.player.x = h.x;
+      world.player.y = h.y + 2;
+    }
+    world.state = "play";
+    world.banner = { text: "Low Tide City", sub: "Work glows gold on the map — Tab opens the phone", t: 3.6 };
   }
 
   function menuStep() {
     if (world.state === "title") {
-      if (Input.consume("up")) Hud.menuIndex = (Hud.menuIndex + 1) % 2;
-      if (Input.consume("down")) Hud.menuIndex = (Hud.menuIndex + 1) % 2;
-      if (Input.consume("confirm") || Input.consume("interact")) activateMenu(Hud.menuIndex);
+      const items = Hud.menuItems(world);
+      Hud.menuIndex = Math.min(Hud.menuIndex, items.length - 1);
+      if (Input.consume("up")) Hud.menuIndex = (Hud.menuIndex + items.length - 1) % items.length;
+      if (Input.consume("down")) Hud.menuIndex = (Hud.menuIndex + 1) % items.length;
+      if (Input.consume("confirm") || Input.consume("interact")) activateMenu(items[Hud.menuIndex].id);
       // The city lives behind the menu.
+      world.time += DT;
       world.events.length = 0;
       Traffic.update(world, DT, world.events, world.rng);
       Peds.update(world, DT, world.events, world.rng);

@@ -1,14 +1,8 @@
 "use strict";
 // Low Tide City — pedestrians.
-//
-// Each ped walks the sidewalk loop around one block (the lot rectangle
-// grown by a pavement's width). They flee from crashes and fast cars,
-// fall when hit, and — by standing within sight of a crime — act as the
-// witnesses the wanted system asks about. Only peds near the player are
-// simulated; the rest of the city is quiet.
 
 const Peds = {
-  TARGET: 26,
+  TARGET: 40,
 
   spawn(world, rng) {
     for (let tries = 0; tries < 10; tries++) {

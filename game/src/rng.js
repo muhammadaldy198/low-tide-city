@@ -1,9 +1,5 @@
 "use strict";
 // Low Tide City — deterministic randomness.
-//
-// One seeded generator builds the whole city, so a seed always produces the
-// same streets, buildings and parked cars. mulberry32 is the core: tiny,
-// fast, and good enough for placement decisions.
 
 function mulberry32(seed) {
   let a = seed >>> 0;
@@ -29,7 +25,6 @@ function makeRng(seed) {
 }
 
 // A stable 2D hash -> [0,1). Used for per-block and per-building variation
-// that must not depend on generation order.
 function hash2(x, y, seed) {
   let h = seed >>> 0;
   h = Math.imul(h ^ Math.imul(x | 0, 374761393), 668265263);

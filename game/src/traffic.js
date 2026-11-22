@@ -1,17 +1,31 @@
 "use strict";
 // Low Tide City — traffic: cars that drive the road grid on their own.
-//
-// Each traffic car follows a leg of one road (a lane line), and at every
-// junction picks the next leg — mostly straight on, sometimes a turn. A
-// pure-pursuit steer chases a look-ahead point along the leg path, and a
-// simple follow-the-leader rule keeps cars from piling into each other.
-// The same steering helper drives the police cars in police.js.
 
 const Traffic = {
-  TARGET: 16, // cars alive at once
+  TARGET: 24, // cars alive at once
+
+  // The signal at the junction this car is rolling toward, and how far
+  lightAhead(car, world) {
+    const vert = Math.abs(Math.sin(car.ang)) > Math.abs(Math.cos(car.ang));
+    const dir = vert ? Math.sign(Math.sin(car.ang)) : Math.sign(Math.cos(car.ang));
+    if (!dir) return null;
+    const along = vert ? car.y : car.x;
+    const m = dir > 0
+      ? Math.floor((along - ROAD_OFF) / PITCH) + 1
+      : Math.ceil((along - ROAD_OFF) / PITCH) - 1;
+    if (m < 0 || m > BLOCKS) return null;
+    const k = Math.round(((vert ? car.x : car.y) - ROAD_OFF) / PITCH);
+    if (k < 0 || k > BLOCKS) return null;
+    if (!isAvenue(k) && !isAvenue(m)) return null;
+    const d = (roadCenter(m) - along) * dir;
+    if (d < 2 || d > 16) return null;
+    // lightState names junctions (vertical road, horizontal road).
+    const state = vert ? City.lightState(k, m, true, world.time)
+      : City.lightState(m, k, false, world.time);
+    return { state, d };
+  },
 
   // Steer one car toward a world point at a wanted speed; returns the
-  // control object stepCar consumes.
   drive(car, tx, ty, speedWanted, dt) {
     const desired = Math.atan2(ty - car.y, tx - car.x);
     const diff = angDiff(desired, car.ang);
@@ -44,7 +58,6 @@ const Traffic = {
 
   spawn(world, rng) {
     // A road point on a ring around the player: close enough to meet,
-    // far enough not to pop in.
     for (let tries = 0; tries < 12; tries++) {
       const vertical = rng.chance(0.5);
       let k = rng.int(0, BLOCKS);
@@ -72,7 +85,6 @@ const Traffic = {
   },
 
   // Append the next leg's waypoints: junction entry, the corner, and a
-  // point down the new leg.
   _extendPath(car, rng) {
     const ai = car.ai;
     const leg = ai.leg;
@@ -98,8 +110,6 @@ const Traffic = {
       next = { vertical: !leg.vertical, k: m, dir: nd };
     }
     // The river rule: a horizontal leg crosses the channel, so it is only
-    // allowed on a bridge row. Anything else falls back to straight on
-    // (a vertical leg runs along a bank and is always on land).
     if (!next.vertical && !BRIDGE_ROWS.includes(next.k)) {
       next = leg;
     }
@@ -153,6 +163,11 @@ const Traffic = {
       }
       let speed = 12.5;
       if (this.blockedAhead(car, world)) speed = 0;
+      else {
+        // Signals: stop for a red, and for an amber still far out.
+        const la = this.lightAhead(car, world);
+        if (la && (la.state === "red" || (la.state === "amber" && la.d > 8))) speed = 0;
+      }
       const ctrl = this.drive(car, tx, ty, speed, dt);
       stepCar(car, ctrl, dt, events);
     }

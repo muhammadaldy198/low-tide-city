@@ -1,7 +1,5 @@
 "use strict";
 // Low Tide City — sprites: every vehicle is drawn once, at load, onto its
-// own small canvas (top-down, nose pointing east), then blitted rotated
-// each frame. People are simple enough to draw directly in render.js.
 
 const SPRITE_SCALE = 8; // px per metre, matches zoom 1
 
@@ -81,6 +79,23 @@ const Sprites = {
       // Windshield sheen.
       ctx.fillStyle = "rgba(160,210,240,0.5)";
       ctx.fillRect(cabX + cabL * 0.78, y0 + W * 0.18, cabL * 0.14, W * 0.64);
+    }
+
+    // Panel detail: door seams, mirrors, bright wheel hubs.
+    ctx.strokeStyle = "rgba(0,0,0,0.22)";
+    ctx.lineWidth = 1;
+    for (const fx of [0.30, 0.68]) {
+      ctx.beginPath();
+      ctx.moveTo(x0 + L * fx, y0 + 1.5);
+      ctx.lineTo(x0 + L * fx, y0 + W - 1.5);
+      ctx.stroke();
+    }
+    ctx.fillStyle = shade(bodyColor.startsWith("#") ? bodyColor : "#888888", 0.7);
+    ctx.fillRect(x0 + L * 0.66, y0 - 1.6, 3.4, 1.8);
+    ctx.fillRect(x0 + L * 0.66, y0 + W - 0.2, 3.4, 1.8);
+    ctx.fillStyle = "rgba(200,205,215,0.8)";
+    for (const sx of [-1, 1]) for (const sy of [-1, 1]) {
+      ctx.fillRect(sx * L * 0.30 - 1.2, sy * (W / 2) + (sy > 0 ? 0.4 : -2.2), 2.4, 1.8);
     }
 
     // Type dressing.
